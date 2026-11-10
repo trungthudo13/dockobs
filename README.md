@@ -6,6 +6,7 @@ Local observability for Linux hosts running rootful Docker Engine:
 - Prometheus: metrics storage
 - cAdvisor: container CPU, memory and network metrics
 - Node Exporter: host metrics
+- NVIDIA DCGM Exporter (optional `gpu` profile): host GPU metrics
 - Loki and Grafana Alloy: container logs grouped by project/service in Logs Drilldown
 - Tempo 2.9.0: OTLP traces with seven-day local retention and TraceQL metrics
 
@@ -25,6 +26,7 @@ permissions restricted; do not use `chmod 666`. Socket access grants control of 
 ```bash
 sudo systemctl enable --now docker
 docker info --format '{{.DockerRootDir}}'
+touch .env
 docker compose config --quiet
 docker compose up -d
 docker compose ps
@@ -97,6 +99,91 @@ Check collection directly:
 docker compose logs --tail=50 cadvisor prometheus
 docker compose exec -T prometheus wget -qO- http://cadvisor:8080/metrics
 ```
+
+## NVIDIA GPU Metrics
+
+The `gpu` profile runs [NVIDIA DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/installation/install-dcgm-exporter.html)
+inside Docker. It requires a supported NVIDIA GPU, a working host driver, and
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+configured for Docker. Confirm `nvidia-smi` works on the host first.
+Non-datacenter GPUs have limited DCGM support; unsupported fields may be absent.
+
+```bash
+nvidia-smi
+docker compose --profile gpu config --quiet
+docker compose --profile gpu up -d dcgm-exporter prometheus grafana
+# Reload Prometheus if it was already running with the old scrape configuration.
+docker compose restart prometheus
+docker compose logs --tail=50 dcgm-exporter
+docker compose exec -T prometheus wget -qO- http://dcgm-exporter:9400/metrics
+```
+
+Open **Local Performance Lab → NVIDIA GPU Overview** in Grafana. The dashboard
+shows utilization (%), used VRAM (MiB), temperature (°C), and power (W) by GPU UUID.
+Check `up{job="nvidia-gpu"}` and `DCGM_FI_DEV_GPU_UTIL{job="nvidia-gpu"}` in Prometheus.
+The exporter uses `SYS_ADMIN` as required by NVIDIA's container setup and exposes
+port 9400 only on the monitoring network. No Docker socket is mounted.
+These are host GPU measurements, including work running in Docker; they do not
+attribute utilization or VRAM to individual application containers.
+
+Without the `gpu` profile, the rest of the stack starts normally and the
+`nvidia-gpu` target remains DOWN; the GPU dashboard has no data.
+
+If `nvidia-smi` reports **Driver/library version mismatch**, compare
+`cat /proc/driver/nvidia/version` with the NVML version in the error. The loaded
+kernel module and installed driver libraries must match. After a driver upgrade,
+a planned host reboot may load the matching module; if versions still differ,
+repair the driver packages for the running kernel. Coordinate downtime for GPU
+workloads before rebooting. An exporter configuration change cannot fix this.
+
+### Detailed GPU metrics with nvidia_gpu_exporter
+
+The `gpu` profile also includes `utkuozdemir/nvidia_gpu_exporter:1.18.0-nvml`
+for the original **Nvidia GPU Metrics** rev18 dashboard (`nvidia_smi_*` metrics).
+DCGM continues serving **NVIDIA GPU Overview** (`DCGM_FI_DEV_*` metrics).
+Both exporters are scraped into the same Prometheus storage under separate jobs.
+
+```bash
+docker compose --profile gpu up -d nvidia-gpu-exporter
+docker compose restart prometheus
+docker compose logs --tail=50 nvidia-gpu-exporter
+```
+
+Check `up{job="nvidia-smi"}` in Prometheus, then open **Nvidia GPU Metrics**.
+The exporter uses the native NVML backend with compute/graphics process collection
+and PCIe throughput enabled. It shares the host PID namespace to identify GPU
+processes, but has no Docker socket mount, privileged mode or published host port.
+Process names and PIDs are stored in Prometheus. Unsupported RTX 3060 features
+(e.g. MIG, ECC, fabric or GPM) may still show N/A; an idle GPU may have no compute
+process rows. This does not indicate a scrape failure.
+
+### GPU container fails mounting nvidia-persistenced/socket
+
+If Docker reports `open /run/nvidia-persistenced/socket: no such file or directory`,
+check `systemctl status nvidia-persistenced` and `nvidia-smi`. A stale NVIDIA CDI
+specification can reference a socket removed when the persistence daemon stopped.
+Do not create a placeholder socket file.
+
+Fix any driver/library mismatch first. Compare the loaded module from
+`cat /proc/driver/nvidia/version` with `modinfo -F version nvidia` (the module on
+disk). If the disk module matches the new libraries, schedule a host reboot to
+load it. After reboot, confirm `nvidia-smi` succeeds, then run:
+
+```bash
+sudo systemctl start nvidia-persistenced
+sudo systemctl reset-failed nvidia-cdi-refresh.service nvidia-cdi-refresh.path
+sudo systemctl restart nvidia-cdi-refresh.path
+sudo systemctl restart nvidia-cdi-refresh.service
+nvidia-ctk cdi list
+docker compose --profile gpu up -d dcgm-exporter
+docker compose logs --tail=50 dcgm-exporter
+```
+
+The refresh units require a recent NVIDIA Container Toolkit. For older versions,
+follow the [manual CDI generation instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html).
+If errors persist, inspect both `/etc/cdi` and `/var/run/cdi` for old specifications;
+the refresh service manages `/var/run/cdi/nvidia.yaml`, so manually generated
+files in `/etc/cdi` may also need updating.
 
 ## Verify Logs
 

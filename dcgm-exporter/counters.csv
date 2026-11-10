@@ -1,0 +1,6 @@
+# DCGM field, Prometheus type, help
+DCGM_FI_DEV_GPU_UTIL, gauge, GPU utilization (percent).
+DCGM_FI_DEV_FB_USED, gauge, Used framebuffer memory (MiB).
+DCGM_FI_DEV_FB_FREE, gauge, Free framebuffer memory (MiB).
+DCGM_FI_DEV_GPU_TEMP, gauge, GPU temperature (C).
+DCGM_FI_DEV_POWER_USAGE, gauge, Power draw (W).

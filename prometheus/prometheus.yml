@@ -22,3 +22,13 @@ scrape_configs:
     static_configs:
       - targets:
           - tempo:3200
+
+  - job_name: nvidia-gpu
+    static_configs:
+      - targets:
+          - dcgm-exporter:9400
+
+  - job_name: nvidia-smi
+    static_configs:
+      - targets:
+          - nvidia-gpu-exporter:9835

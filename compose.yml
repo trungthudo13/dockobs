@@ -83,6 +83,52 @@ services:
     networks:
       - monitoring
 
+  nvidia-gpu-exporter:
+    image: docker.io/utkuozdemir/nvidia_gpu_exporter:1.18.0-nvml
+    container_name: monitor-nvidia-gpu-exporter
+    profiles: [gpu]
+    restart: unless-stopped
+    # NVML needs the host PID namespace to resolve GPU process names.
+    pid: host
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    command:
+      - "--collect.interval=5s"
+      - "--collect.compute-apps"
+      - "--collect.graphics-apps"
+      - "--collect.pcie-throughput"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - monitoring
+
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.3-4.8.2-distroless
+    container_name: monitor-dcgm-exporter
+    profiles: [gpu]
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      DCGM_EXPORTER_INTERVAL: "5000"
+      DCGM_EXPORTER_COLLECTORS: /etc/dcgm-exporter/local-counters.csv
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./dcgm-exporter/counters.csv:/etc/dcgm-exporter/local-counters.csv:ro
+    networks:
+      - monitoring
+
   loki:
     image: docker.io/grafana/loki:latest
     container_name: monitor-loki
